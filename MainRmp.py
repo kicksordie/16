@@ -11,9 +11,13 @@ from src.DataIo import ReadReviews
 from src.DataObject import RatingsObject
 # sklearn stuff
 from sklearn.feature_extraction import DictVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import Imputer
 
 from sklearn.linear_model import LinearRegression
+
+# Output the Mean Squared Error using our held out training data
+from sklearn.metrics import mean_squared_error
 
 def GetData(FileName):
     """
@@ -33,7 +37,7 @@ def ToVectorizableData(DataFrame):
         Vectorizable data frame
     """
     # XXX for now, ignore the comments
-    columns = set(DataFrame.columns) - set(["tags","quality","comments",
+    columns = set(DataFrame.columns) - set(["tags","quality",
                                             "easiness","clarity","helfullness"])
     ToVectorize = DataFrame[list(columns)].to_dict('records')
     return ToVectorize
@@ -84,25 +88,51 @@ def GetLabel(DataFrame):
     """
     return DataFrame['quality']
 
-def run():
+def WritePredictions(Frame,Predictions):
     """
-    <Description>
+    Given a data frame (with ids) and predictions, write out the predictions 
+    file 
 
     Args:
-        param1: This is the first param.
-    
-    Returns:
-        This is a description of what is returned.
+         Frame: data frame for the predictions, assumed conserved order
+         Predictions: predicted values for each 'row' in frame
+    """
+    with open('predictions.csv', 'w') as f:
+        f.write("id,quality\n")
+        for row_id, prediction in zip(Frame['id'], Predictions):
+            f.write('{},{}\n'.format(row_id, prediction))
+
+def FitCommentsVectorizer(Frame):
+    return TfidfVectorizer.fit(Frame,maxdf=0.7,mindf=0.1)
+
+def ConvertCommentsToTfIdf(Frame,Vectorizer):
+    Copy = Frame.copy()
+    Copy["comments"] = Vectorizer.transform(Copy["comments"])
+    return Copy
+
+def GetScore(Predicted,Actual):
+    return mean_squared_error(Actual,Predicted)
+
+def run():
+    """
+    Reads in the data, splits it into training and testing, transforms it 
     """
     TrainFile = "../data/train.csv"
     TestFile = "../data/test.csv"
     ForceRead=False
     ForceVect=False
     # Read in the data sets
-    # XXX TODO: use training / set sets
+    FractionTrain = 0.8
+    # split into validation and training
 # stackoverflow.com/questions/24147278/how-do-i-create-test-and-train-samples-from-one-dataframe-with-pandas
-    TrainData = CheckpointUtilities.getCheckpoint("Train.pkl",GetData,
-                                                  ForceRead,TrainFile)
+    AllTraining = CheckpointUtilities.getCheckpoint("Train.pkl",GetData,
+                                                    ForceRead,TrainFile)
+    NTrain = AllTraining.shape[0]
+    TrainMask = np.random.rand(NTrain) < FractionTrain
+    TrainData = AllTraining[TrainMask]
+    ValidData = AllTraining[~TrainMask]
+    # fit to the comments on the training data
+    #TfIdf = FitCommentsVectorizer(TrainData)
     TestData = CheckpointUtilities.getCheckpoint("Test.pkl",GetData,
                                                  ForceRead,TestFile)
     # fit a vecotrizer to the training set
@@ -110,16 +140,29 @@ def run():
                                              ForceVect,TrainData)
     # transform the data sets to feature matrices
     TrainFeatures = Vect.transform(ToVectorizableData(TrainData))
+    ValidFeatures = Vect.transform(ToVectorizableData(ValidData))
     TestFeatures = Vect.transform(ToVectorizableData(TestData))
     # train our model, using the training data
     TrainLabels =GetLabel(TrainData)
+    ValidLabels = GetLabel(ValidData)
     lr = FitTraining(TrainFeatures,TrainLabels)
-    PredTrain = lr.predict(SafeInput(TrainFeatures))
-    PredTest= lr.predict(SafeInput(TestFeatures))
+    Sanitize = lambda x : np.maximum(2,np.minimum(10,x))
+    PredValid = Sanitize(lr.predict(SafeInput(ValidFeatures)))
+    PredTrain= Sanitize(lr.predict(SafeInput(TrainFeatures)))
+    PredTest= Sanitize(lr.predict(SafeInput(TestFeatures)))
+    WritePredictions(TestData,PredTest)
     # make a very simple diagnostic figure
     fig = PlotUtilities.figure()
-    plt.plot(TrainLabels,PredTrain,'r.')
-    PlotUtilities.lazyLabel("Actual","Predicted","RMP Scores")
+    Limits = [1,11]
+    ValidRMSE = GetScore(PredValid,ValidLabels)
+    TrainRMSE = GetScore(PredTrain,TrainLabels)
+    ValidLabel = "Valid RMSE: {:.2f}".format(ValidRMSE)
+    TrainLabel = "Train RMSE: {:.2f}".format(TrainRMSE)
+    plt.plot(TrainLabels,PredTrain,'r.',label=TrainLabel)
+    plt.plot(ValidLabels,PredValid,'b.',label=ValidLabel)
+    plt.xlim(Limits)
+    plt.ylim(Limits)
+    PlotUtilities.lazyLabel("Actual","Predicted","RMP Scores",frameon=True)
     PlotUtilities.savefig(fig,"out.png")
     
 
