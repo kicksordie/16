@@ -11,6 +11,7 @@ from src.DataIo import ReadReviews
 from src.DataObject import RatingsObject
 # sklearn stuff
 from sklearn.feature_extraction import DictVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import Imputer
 
 from sklearn.linear_model import LinearRegression
@@ -33,7 +34,7 @@ def ToVectorizableData(DataFrame):
         Vectorizable data frame
     """
     # XXX for now, ignore the comments
-    columns = set(DataFrame.columns) - set(["tags","quality","comments",
+    columns = set(DataFrame.columns) - set(["tags","quality",
                                             "easiness","clarity","helfullness"])
     ToVectorize = DataFrame[list(columns)].to_dict('records')
     return ToVectorize
@@ -85,20 +86,31 @@ def GetLabel(DataFrame):
     return DataFrame['quality']
 
 def WritePredictions(Frame,Predictions):
+    """
+    Given a data frame (with ids) and predictions, write out the predictions 
+    file 
+
+    Args:
+         Frame: data frame for the predictions, assumed conserved order
+         Predictions: predicted values for each 'row' in frame
+    """
     with open('predictions.csv', 'w') as f:
         f.write("id,quality\n")
         for row_id, prediction in zip(Frame['id'], Predictions):
             f.write('{},{}\n'.format(row_id, prediction))
 
+def FitCommentsVectorizer(Frame):
+    return TfidfVectorizer.fit(Frame,maxdf=0.7,mindf=0.1)
+
+def ConvertCommentsToTfIdf(Frame,Vectorizer):
+    Copy = Frame.copy()
+    Copy["comments"] = Vectorizer.transform(Copy["comments"])
+    return Copy
+
+
 def run():
     """
-    <Description>
-
-    Args:
-        param1: This is the first param.
-    
-    Returns:
-        This is a description of what is returned.
+    Reads in the data, splits it into training and testing, transforms it 
     """
     TrainFile = "../data/train.csv"
     TestFile = "../data/test.csv"
@@ -114,6 +126,8 @@ def run():
     TrainMask = np.random.rand(NTrain) < FractionTrain
     TrainData = AllTraining[TrainMask]
     ValidData = AllTraining[~TrainMask]
+    # fit to the comments on the training data
+    #TfIdf = FitCommentsVectorizer(TrainData)
     TestData = CheckpointUtilities.getCheckpoint("Test.pkl",GetData,
                                                  ForceRead,TestFile)
     # fit a vecotrizer to the training set
