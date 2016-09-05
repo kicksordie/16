@@ -12,7 +12,6 @@
 */.git/*
 *.DS_Store
 *.txt
-*.csv
 *py~
 *~
 *.pkl
