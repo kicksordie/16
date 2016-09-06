@@ -7,15 +7,54 @@ import sys
 import copy
 import pandas
 
-def CategoryCastToInteger(column):
-    casted = pandas.Series(column,dtype="category")
-    print(casted.cat)
-    return casted
+from sklearn.preprocessing import LabelEncoder,StandardScaler,\
+    MultiLabelBinarizer
 
-CategoryCols = ['dept','attendance','textbookuse','interest','grade','online',
-                'profgender','profhotness','tags']
+from sklearn.preprocessing import Imputer
+IdCols = ["eid","tid"]
+CategoryCols =["dept","forcredit","attendance","textbookuse","interest",
+               "grade","online","profgender"]
+ArrCols = ["tags"]
+DateCols = ["date"]
+NumericalCols = ["helpcount","nothelpcount","profhotness"]
 
+def GetComments(frame):
+    raw = frame['comments']
+    return raw.replace(np.nan,' ', regex=True)
 
+def _GenericConverterFit(Func,Column,**kwargs):
+    Converter = Func(**kwargs)
+    Converter.fit(Column.reshape(-1,1))
+    return Converter
+
+def GetCategoryColumnConverter(Column):
+    return _GenericConverterFit(LabelEncoder,Column)
+
+def GetNumericalColumnConverter(Column):
+    return _GenericConverterFit(StandardScaler,Column)
+
+def GetArrayColumnConverter(Column):
+    return _GenericConverterFit(MultiLabelBinarizer,Column)
+
+def FitDataPreprocessors(Frame):
+    ToRet = []
+    Cols = [CategoryCols,NumericalCols,ArrCols]
+    Funcs = [GetCategoryColumnConverter,GetNumericalColumnConverter,
+             GetArrayColumnConverter]
+    for ListOfCols,Func in zip(Cols,Funcs):
+        ToRet.extend([Func(Frame[c]) for c in ListOfCols])
+    return ToRet
+
+def PreProcessData(PreProcessors,Frame):
+    AllCols = CategoryCols + NumericalCols + ArrCols
+    Final = []
+    NumCols = 0
+    for c,p in zip(AllCols,PreProcessors):
+        Columns = p.transform(Frame[c])
+        Final.append(Columns)
+        NumCols += 1 if len(Columns.shape)==1 else Columns.shape[1]
+    return Final.reshape(-1,NumCols)
+    
 class RatingsObject:
     """
     This is a more abstracted review object; we take in a 'raw' review as

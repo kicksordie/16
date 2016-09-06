@@ -8,7 +8,7 @@ import sys
 sys.path.append("../")
 from GeneralUtil.python import CheckpointUtilities,PlotUtilities
 from src.DataIo import ReadReviews
-from src.DataObject import RatingsObject
+from src.DataObject import RatingsObject,GetComments
 # sklearn stuff
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -27,46 +27,24 @@ def GetData(FileName):
     return RawReview
 
 
-def ToVectorizableData(DataFrame):
-    """
-    Given a data frame, gets the columns we want to use for vectorizing
-    
-    Args:
-        DataFrame: Return from GetData
-    Returns:
-        Vectorizable data frame
-    """
-    # XXX for now, ignore the comments
-    columns = set(DataFrame.columns) - set(["tags","quality",
-                                            "easiness","clarity","helfullness"])
-    ToVectorize = DataFrame[list(columns)].to_dict('records')
-    return ToVectorize
-
-def FitVectorizer(DataFrame):
+def FeatureFitter(DataFrame,max_features=1000,min_df=0.01,max_df=0.95):
     """
     Fits a vectorizer to a dataframe
     
     Args:
          Dataframe: pandas dataa frame to use
     Returns:
-         vectorizer
+         list of pre-processors in the order DataObject understands
     """
-    ToVectorize = ToVectorizableData(DataFrame)
-    Vect = DictVectorizer()
-    Vect.fit(ToVectorize)
-    return Vect
-
-def SafeInput(X):
-    """
-    Given a feature matri, makes it fittable (ie: no nans)
+    Comments = GetComments(DataFrame)
+    vect = TfidfVectorizer(max_features=max_features,min_df=min_df,
+                           max_df=max_df)
+    vect.fit(Comments)
+    return vect
     
-    Args:
-         X: feature matrix
-    Returns:
-         fitted and transformed (nan-free) feature matrix
-    """
-    imp = Imputer(missing_values='NaN', strategy='mean', axis=0)
-    return imp.fit_transform(X)
+def TransformToFeatures(Fitter,DataFrame):
+    vocab = Fitter
+    return vocab.transform(GetComments(DataFrame))
 
 def FitTraining(Features,Labels):
     """
@@ -79,7 +57,7 @@ def FitTraining(Features,Labels):
         fitted model object
     """
     lr = LinearRegression()
-    lr.fit(SafeInput(Features),Labels)
+    lr.fit(Features,Labels)
     return lr
 
 def GetLabel(DataFrame):
@@ -99,16 +77,8 @@ def WritePredictions(Frame,Predictions):
     """
     with open('predictions.csv', 'w') as f:
         f.write("id,quality\n")
-        for row_id, prediction in zip(Frame['id'], Predictions):
+        for row_id, prediction in zip(Frame['eid'], Predictions):
             f.write('{},{}\n'.format(row_id, prediction))
-
-def FitCommentsVectorizer(Frame):
-    return TfidfVectorizer.fit(Frame,maxdf=0.7,mindf=0.1)
-
-def ConvertCommentsToTfIdf(Frame,Vectorizer):
-    Copy = Frame.copy()
-    Copy["comments"] = Vectorizer.transform(Copy["comments"])
-    return Copy
 
 def GetScore(Predicted,Actual):
     return mean_squared_error(Actual,Predicted)
@@ -117,12 +87,14 @@ def run():
     """
     Reads in the data, splits it into training and testing, transforms it 
     """
-    TrainFile = "../data/train.csv"
-    TestFile = "../data/test.csv"
+    BaseData = "../data/"
+    TrainFile = BaseData + "train.csv"
+    TestFile = BaseData + "test.csv"
     ForceRead=False
     ForceVect=False
     # Read in the data sets
-    FractionTrain = 0.8
+    FractionTrain = 0.9
+    np.random.seed(42)
     # split into validation and training
 # stackoverflow.com/questions/24147278/how-do-i-create-test-and-train-samples-from-one-dataframe-with-pandas
     AllTraining = CheckpointUtilities.getCheckpoint("Train.pkl",GetData,
@@ -136,20 +108,19 @@ def run():
     TestData = CheckpointUtilities.getCheckpoint("Test.pkl",GetData,
                                                  ForceRead,TestFile)
     # fit a vecotrizer to the training set
-    Vect = CheckpointUtilities.getCheckpoint("Vect.pkl",FitVectorizer,
-                                             ForceVect,TrainData)
-    # transform the data sets to feature matrices
-    TrainFeatures = Vect.transform(ToVectorizableData(TrainData))
-    ValidFeatures = Vect.transform(ToVectorizableData(ValidData))
-    TestFeatures = Vect.transform(ToVectorizableData(TestData))
+    PreProcessors = CheckpointUtilities.getCheckpoint("Vect.pkl",FeatureFitter,
+                                                      ForceVect,TrainData)
+    Data = [TrainData,ValidData,TestData]
+    TrainFeatures,ValidFeatures,TestFeatures = \
+        [TransformToFeatures(PreProcessors,d) for d in Data]
     # train our model, using the training data
     TrainLabels =GetLabel(TrainData)
     ValidLabels = GetLabel(ValidData)
     lr = FitTraining(TrainFeatures,TrainLabels)
     Sanitize = lambda x : np.maximum(2,np.minimum(10,x))
-    PredValid = Sanitize(lr.predict(SafeInput(ValidFeatures)))
-    PredTrain= Sanitize(lr.predict(SafeInput(TrainFeatures)))
-    PredTest= Sanitize(lr.predict(SafeInput(TestFeatures)))
+    PredValid = Sanitize(lr.predict(ValidFeatures))
+    PredTrain= Sanitize(lr.predict(TrainFeatures))
+    PredTest= Sanitize(lr.predict(TestFeatures))
     WritePredictions(TestData,PredTest)
     # make a very simple diagnostic figure
     fig = PlotUtilities.figure()
